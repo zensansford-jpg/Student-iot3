@@ -1,16 +1,17 @@
 /*
-  StudentIoT — ESP32 + DHT11
+  StudentIoT / Neural Core — ESP32 + DHT11
   Wiring:
     DHT11 VCC  -> ESP32 3V3
     DHT11 GND  -> ESP32 GND
     DHT11 DATA -> ESP32 GPIO 4
+
   Install Arduino libraries:
     - DHT sensor library by Adafruit
     - Adafruit Unified Sensor
 
   Configure WIFI_SSID and WIFI_PASSWORD before uploading.
-  Uses the Supabase publishable/anon key and the existing validated
-  public INSERT policy. Never put a service_role/secret key in firmware.
+  Uses the Supabase publishable key in the apikey header and the existing RLS-constrained INSERT policy.
+  Never put a service_role/secret key in firmware.
 */
 
 #include <WiFi.h>
@@ -68,7 +69,6 @@ bool sendReading(const char* type, float value, const char* unit) {
 
   http.addHeader("Content-Type", "application/json");
   http.addHeader("apikey", SUPABASE_ANON_KEY);
-  http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
   http.addHeader("Prefer", "return=minimal");
 
   String body = "{\"sensor_name\":\"" + String(DEVICE_NAME) +

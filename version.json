@@ -1,0 +1,16 @@
+{
+  "name": "Neural Core — StudentIoT3",
+  "version": "1.0.1",
+  "releasedAt": "2026-11-22",
+  "channel": "stable",
+  "approved": true,
+  "notes": [
+    "Neural Core StudentIoT3 integration release candidate.",
+    "Adds explicit approval before activating staged service-worker updates.",
+    "Ensures update manifest checks bypass cached responses.",
+    "Clarifies cache repair versus true GitHub Pages release rollback.",
+    "Uses the Supabase publishable key only in the apikey header for ESP32 REST uploads."
+  ],
+  "source": "https://github.com/zensansford-jpg/Student-iot3",
+  "rollbackVersion": null
+}

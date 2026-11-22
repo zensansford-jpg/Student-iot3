@@ -1,0 +1,10 @@
+{
+  "name": "Neural Core — StudentIoT3",
+  "short_name": "Neural Core",
+  "description": "Real-time ESP32 DHT11 IoT command center powered by Supabase.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#07111f",
+  "theme_color": "#07111f",
+  "icons": []
+}
