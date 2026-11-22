@@ -1,16 +1,16 @@
 {
-  "name": "Neural Core — StudentIoT3",
-  "version": "1.0.1",
-  "releasedAt": "2026-11-22",
-  "channel": "stable",
-  "approved": true,
-  "notes": [
-    "Neural Core StudentIoT3 integration release candidate.",
-    "Adds explicit approval before activating staged service-worker updates.",
-    "Ensures update manifest checks bypass cached responses.",
-    "Clarifies cache repair versus true GitHub Pages release rollback.",
-    "Uses the Supabase publishable key only in the apikey header for ESP32 REST uploads."
+  "name":"Neural Core — StudentIoT3",
+  "version":"1.1.0",
+  "releasedAt":"2026-11-22",
+  "channel":"stable",
+  "approved":true,
+  "notes":[
+    "Neural Core 1.1 visual overhaul: holographic command-deck styling and a denser animated neural topology.",
+    "Network visualization maps ESP32, Wi-Fi, temperature, humidity, Supabase, Realtime, REST fallback, and dashboard paths.",
+    "Animation follows actual device and connection state; it does not generate fake sensor readings.",
+    "Approved release detection runs every five minutes; applying an update still requires user approval.",
+    "Preserves the existing Supabase sensor_readings schema and ESP32-01 DHT11 contract."
   ],
-  "source": "https://github.com/zensansford-jpg/Student-iot3",
-  "rollbackVersion": null
+  "source":"https://github.com/zensansford-jpg/Student-iot3",
+  "rollbackVersion":"1.0.1"
 }

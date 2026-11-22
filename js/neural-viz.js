@@ -1,88 +1,29 @@
 import { getState, deviceStatus } from './store.js';
-
-let raf = null;
-let ctx = null;
-let canvas = null;
-let width = 0, height = 0, dpr = 1;
-const pulses = [];
-let lastPulse = 0;
-let nextPulseEdge = 0;
-
-const nodes = [
-  { id:'esp32', label:'ESP32-01', x:.15, y:.5, color:'#35c6a1' },
-  { id:'wifi', label:'Wi-Fi', x:.35, y:.28, color:'#64a9ff' },
-  { id:'supabase', label:'Supabase', x:.58, y:.5, color:'#8b7bff' },
-  { id:'dashboard', label:'Neural Core', x:.82, y:.5, color:'#35d0ff' },
-  { id:'temperature', label:'Temp', x:.35, y:.72, color:'#ffb86b' },
-  { id:'humidity', label:'Humidity', x:.58, y:.72, color:'#64d2ff' }
+let canvas=null,ctx=null,raf=0,width=0,height=0,dpr=1,lastFrame=0,reducedMotion=false,observer=null;
+const particles=[];
+const core={id:'core',label:'NEURAL CORE',x:.50,y:.49};
+const nodes=[
+{id:'esp',label:'ESP32-01',detail:'DHT11 / GPIO4',x:.12,y:.50},
+{id:'wifi',label:'WI-FI LINK',detail:'Transport',x:.29,y:.25},
+{id:'temp',label:'TEMPERATURE',detail:'Measured °C',x:.30,y:.72},
+{id:'humid',label:'HUMIDITY',detail:'Measured %',x:.48,y:.84},
+{id:'db',label:'SUPABASE',detail:'Postgres / Realtime',x:.72,y:.50},
+{id:'rt',label:'REALTIME',detail:'INSERT stream',x:.85,y:.26},
+{id:'poll',label:'REST SYNC',detail:'Polling fallback',x:.85,y:.74},
+{id:'ui',label:'COMMAND UI',detail:'Live dashboard',x:.95,y:.50}
 ];
-const edges = [['esp32','wifi'],['esp32','temperature'],['esp32','humidity'],['wifi','supabase'],['temperature','supabase'],['humidity','supabase'],['supabase','dashboard']];
-
-function resize() {
-  if (!canvas) return;
-  dpr = Math.min(window.devicePixelRatio || 1, 2);
-  width = canvas.clientWidth; height = canvas.clientHeight;
-  canvas.width = Math.floor(width*dpr); canvas.height = Math.floor(height*dpr);
-  ctx = canvas.getContext('2d');
-  ctx.setTransform(dpr,0,0,dpr,0,0);
-}
-
-function nodeState(id, s, ds) {
-  if (id==='esp32') return ds.code === 'ONLINE' ? 'ok' : ds.code === 'WAITING' ? 'warn' : ds.code === 'OFFLINE' ? 'warn' : 'error';
-  if (id==='wifi') return s.connection.supabase === 'error' ? 'warn' : 'ok';
-  if (id==='supabase') return s.connection.supabase === 'ok' ? 'ok' : s.connection.supabase === 'error' ? 'error' : 'warn';
-  if (id==='dashboard') return 'ok';
-  if (id==='temperature' || id==='humidity') {
-    const has = s.rows.find(r=>r.sensor_type===id);
-    return has ? (ds.code==='ONLINE'?'ok':'warn') : 'warn';
-  }
-  return 'warn';
-}
-function colorFor(state, base) { return state==='ok' ? base : state==='warn' ? '#f6b95c' : '#ff6b6b'; }
-export function pushPulse() { pulses.push({ t:0, edge: edges[nextPulseEdge++ % edges.length] }); }
-
-export function initNeuralViz(canvasEl) {
-  canvas = canvasEl; resize();
-  window.addEventListener('resize', resize);
-  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let last = performance.now();
-  function frame(now) {
-    const dt = Math.min(0.05, (now-last)/1000); last = now;
-    draw(now/1000, dt, reduced);
-    raf = requestAnimationFrame(frame);
-  }
-  raf = requestAnimationFrame(frame);
-}
-export function destroyNeuralViz(){ if (raf) cancelAnimationFrame(raf); raf=null; }
-
-function draw(time, dt, reduced) {
-  if (!ctx) return;
-  const s = getState(); const ds = deviceStatus();
-  ctx.clearRect(0,0,width,height);
-  ctx.strokeStyle = 'rgba(90,140,180,0.08)'; ctx.lineWidth = 1;
-  for (let x=0;x<width;x+=40){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,height); ctx.stroke(); }
-  for (let y=0;y<height;y+=40){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(width,y); ctx.stroke(); }
-  const pos = Object.fromEntries(nodes.map(n=>[n.id,{x:n.x*width,y:n.y*height,n}]));
-  for (const [a,b] of edges) {
-    const A=pos[a], B=pos[b]; const ok=nodeState(a,s,ds)==='ok' && nodeState(b,s,ds)==='ok';
-    ctx.strokeStyle = ok ? 'rgba(53,198,161,0.35)' : 'rgba(246,185,92,0.22)';
-    ctx.lineWidth=1.2; ctx.beginPath(); ctx.moveTo(A.x,A.y); ctx.lineTo(B.x,B.y); ctx.stroke();
-  }
-  if (!reduced) {
-    if (time-lastPulse > 1.8 && ds.code==='ONLINE') { pushPulse(); lastPulse=time; }
-    for (let i=pulses.length-1;i>=0;i--) {
-      const p=pulses[i]; p.t+=dt*0.35; if(p.t>1){pulses.splice(i,1);continue;}
-      const A=pos[p.edge[0]], B=pos[p.edge[1]]; const x=A.x+(B.x-A.x)*p.t, y=A.y+(B.y-A.y)*p.t;
-      ctx.fillStyle='rgba(120,240,255,0.95)'; ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle='rgba(120,240,255,0.18)'; ctx.beginPath(); ctx.arc(x,y,8,0,Math.PI*2); ctx.fill();
-    }
-  }
-  for (const n of nodes) {
-    const p=pos[n.id], st=nodeState(n.id,s,ds), c=colorFor(st,n.color), pulse=reduced?0:Math.sin(time*2+p.x*0.01)*2;
-    ctx.fillStyle=c+'22'; ctx.beginPath(); ctx.arc(p.x,p.y,22+pulse,0,Math.PI*2); ctx.fill();
-    ctx.strokeStyle=c; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(p.x,p.y,14,0,Math.PI*2); ctx.stroke();
-    ctx.fillStyle=c; ctx.beginPath(); ctx.arc(p.x,p.y,4.5,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle='rgba(230,245,255,0.92)'; ctx.font='12px Inter, system-ui, sans-serif'; ctx.textAlign='center'; ctx.fillText(n.label,p.x,p.y-28);
-    ctx.fillStyle=st==='ok'?'#8ce1c8':st==='warn'?'#ffd28d':'#ff9a9a'; ctx.font='10px Inter, system-ui, sans-serif'; ctx.fillText(st.toUpperCase(),p.x,p.y+34);
-  }
-}
+const inner=Array.from({length:32},(_,i)=>{const a=2*Math.PI*i/32;const r=.12+(i%4)*.012;return{x:.5+Math.cos(a)*r,y:.49+Math.sin(a)*r,phase:i*.7};});
+const edges=[['esp','core'],['wifi','core'],['temp','core'],['humid','core'],['db','core'],['rt','core'],['poll','core'],['ui','core'],['esp','wifi'],['esp','temp'],['esp','humid'],['wifi','db'],['temp','db'],['humid','db'],['db','rt'],['db','poll'],['rt','ui'],['poll','ui'],['wifi','temp'],['temp','humid']];
+const colors={ok:'#4cf2d1',warn:'#ffca72',error:'#ff667d',idle:'#7288a8'};
+function resize(){if(!canvas)return;const r=canvas.getBoundingClientRect();width=Math.max(1,r.width);height=Math.max(1,r.height);dpr=Math.min(devicePixelRatio||1,2);canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);ctx=canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);}
+function state(id,s,ds){if(id==='core'||id==='ui')return'ok';if(id==='esp')return ds.code==='ONLINE'?'ok':ds.code==='ERROR'?'error':'warn';if(id==='wifi')return s.connection.supabase==='error'?'warn':ds.code==='ONLINE'?'ok':'idle';if(id==='db')return s.connection.supabase==='ok'?'ok':s.connection.supabase==='error'?'error':'warn';if(id==='rt')return s.connection.realtime==='ok'?'ok':s.connection.realtime==='error'?'warn':'idle';if(id==='poll')return s.connection.supabase==='ok'?'ok':'warn';const type=id==='temp'?'temperature':'humidity';return s.rows.some(r=>r.sensor_type===type)?(ds.code==='ONLINE'?'ok':'warn'):'idle';}
+function point(n){return{x:n.x*width,y:n.y*height};}
+function link(a,b,s,ds){const A=point(a==='core'?core:nodes.find(n=>n.id===a)),B=point(b==='core'?core:nodes.find(n=>n.id===b));const healthy=state(a,s,ds)==='ok'&&state(b,s,ds)==='ok';ctx.beginPath();ctx.moveTo(A.x,A.y);ctx.lineTo(B.x,B.y);ctx.strokeStyle=healthy?'rgba(67,235,213,.43)':'rgba(112,155,190,.20)';ctx.lineWidth=healthy?1.25:.85;ctx.stroke();}
+function addParticle(a,b){particles.push({a,b,t:0,speed:.2+Math.random()*.12,r:1.5+Math.random()*1.6});if(particles.length>90)particles.shift();}
+function background(time){ctx.clearRect(0,0,width,height);const g=ctx.createRadialGradient(width*.5,height*.5,4,width*.5,height*.5,Math.max(width,height)*.65);g.addColorStop(0,'rgba(12,90,130,.24)');g.addColorStop(1,'rgba(1,8,20,0)');ctx.fillStyle=g;ctx.fillRect(0,0,width,height);ctx.strokeStyle='rgba(87,183,225,.07)';ctx.lineWidth=.6;for(let x=0;x<width;x+=32){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,height);ctx.stroke();}for(let y=0;y<height;y+=32){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(width,y);ctx.stroke();}const c=point(core);ctx.save();ctx.translate(c.x,c.y);ctx.rotate(time*.055);for(const r of [65,108,151]){ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.setLineDash([2,9]);ctx.strokeStyle='rgba(85,220,255,.17)';ctx.stroke();}ctx.restore();}
+function drawNode(n,time,s,ds,small=false){const p=point(n),st=state(n.id,s,ds),col=colors[st]||colors.idle,r=small?2.2:n.id==='db'?12:n.id==='esp'?11:8;if(!small){const glow=ctx.createRadialGradient(p.x,p.y,1,p.x,p.y,r*3.8);glow.addColorStop(0,col+'66');glow.addColorStop(1,col+'00');ctx.fillStyle=glow;ctx.beginPath();ctx.arc(p.x,p.y,r*3.8,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(p.x,p.y,r+4,0,Math.PI*2);ctx.strokeStyle=col+'99';ctx.stroke();}ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=small?'rgba(100,215,255,'+(.28+Math.sin(time*1.4+n.phase)*.1)+')':col;ctx.fill();if(!small){ctx.textAlign='center';ctx.font='700 9px Inter,sans-serif';ctx.fillStyle='#def8ff';ctx.fillText(n.label,p.x,p.y-20);ctx.font='9px Inter,sans-serif';ctx.fillStyle='rgba(160,198,222,.8)';ctx.fillText(n.detail,p.x,p.y+25);}}
+function drawCore(time,active){const p=point(core),r=Math.min(43,Math.max(28,width*.045));ctx.save();ctx.translate(p.x,p.y);const glow=ctx.createRadialGradient(0,0,2,0,0,r*3);glow.addColorStop(0,'rgba(75,238,255,.36)');glow.addColorStop(1,'rgba(50,130,255,0)');ctx.fillStyle=glow;ctx.beginPath();ctx.arc(0,0,r*3,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#60eaf4';ctx.setLineDash([5,5]);ctx.beginPath();ctx.arc(0,0,r+13,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle='#092b49';ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fill();ctx.strokeStyle=active?'#66f5df':'#e9bc70';ctx.lineWidth=2;ctx.stroke();ctx.fillStyle='#efffff';ctx.font='800 10px Inter,sans-serif';ctx.textAlign='center';ctx.fillText('NEURAL',0,-3);ctx.fillText('CORE',0,10);ctx.restore();}
+function frame(now){const dt=Math.min(.05,(now-lastFrame)/1000);lastFrame=now;const time=now/1000,s=getState(),ds=deviceStatus(),active=ds.code==='ONLINE'&&s.connection.supabase==='ok';background(time);for(const [a,b] of edges)link(a,b,s,ds);const c=point(core);for(const n of inner){const p=point(n);ctx.beginPath();ctx.moveTo(c.x,c.y);ctx.lineTo(p.x,p.y);ctx.strokeStyle='rgba(75,188,255,.12)';ctx.stroke();drawNode(n,time,s,ds,true);}if(active&&!reducedMotion&&Math.random()<dt*6){const choices=[['esp','wifi'],['wifi','db'],['db','rt'],['rt','ui'],['esp','temp'],['esp','humid'],['db','poll']];const e=choices[Math.floor(Math.random()*choices.length)];addParticle(e[0],e[1]);}if(!reducedMotion){for(let i=particles.length-1;i>=0;i--){const q=particles[i];q.t+=dt*q.speed;if(q.t>=1){particles.splice(i,1);continue;}const A=point(nodes.find(n=>n.id===q.a)),B=point(nodes.find(n=>n.id===q.b)),x=A.x+(B.x-A.x)*q.t,y=A.y+(B.y-A.y)*q.t;ctx.beginPath();ctx.arc(x,y,q.r,0,Math.PI*2);ctx.fillStyle='#a5ffff';ctx.shadowBlur=13;ctx.shadowColor='#55eaff';ctx.fill();ctx.shadowBlur=0;}}for(const n of nodes)drawNode(n,time,s,ds);drawCore(time,active);ctx.textAlign='left';ctx.font='700 9px Inter,sans-serif';ctx.fillStyle=active?'#6df3d6':'#ffd083';ctx.fillText(active?'TELEMETRY FLOW ACTIVE':'NETWORK AWAITING / DEGRADED',14,20);ctx.textAlign='right';ctx.fillStyle='rgba(165,200,226,.65)';ctx.font='9px ui-monospace,monospace';ctx.fillText('LIVE SYSTEM TOPOLOGY',width-14,20);raf=requestAnimationFrame(frame);}
+export function initNeuralViz(el){canvas=el;reducedMotion=window.matchMedia('(prefers-reduced-motion: reduce)').matches;resize();if('ResizeObserver'in window){observer=new ResizeObserver(resize);observer.observe(canvas);}else window.addEventListener('resize',resize);lastFrame=performance.now();raf=requestAnimationFrame(frame);}
+export function pushPulse(){if(reducedMotion)return;addParticle('esp','wifi');addParticle('wifi','db');addParticle('db','rt');addParticle('rt','ui');}
+export function destroyNeuralViz(){if(raf)cancelAnimationFrame(raf);raf=0;if(observer)observer.disconnect();observer=null;window.removeEventListener('resize',resize);canvas=null;ctx=null;}
