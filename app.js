@@ -4,17 +4,17 @@
   const $ = (id) => document.getElementById(id);
   const SUPABASE_URL = "https://bbnvfbjkzjexcfyprkbl.supabase.co";
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_LVBYcxg9tXCvag0DVPjumQ_uBoGI451";
+  const DEVICE_NAME = "ESP32-01";
   const SENSOR_META = {
     temperature: { label: "Temperature", metric: "temperatureValue", status: "temperatureStatus", unit: "°C" },
-    humidity: { label: "Humidity", metric: "humidityValue", status: "humidityStatus", unit: "%" },
-    light: { label: "Light level", metric: "lightValue", status: "lightStatus", unit: "lx" },
-    distance: { label: "Distance", metric: "distanceValue", status: "distanceStatus", unit: "cm" }
+    humidity: { label: "Humidity", metric: "humidityValue", status: "humidityStatus", unit: "%" }
   };
-
-  let supabaseClient = null;
+  const ONLINE_WINDOW_MS = 30000;
+  let client = null;
   let rows = [];
   let currentRange = "1H";
-  let lastFetchAt = null;
+  let refreshTimer = null;
+  let channel = null;
 
   function setCloudStatus(message, state = "pending") {
     const node = $("supabaseStatus");
@@ -23,153 +23,171 @@
     node.title = message;
   }
 
+  function safeText(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[ch]));
+  }
+
   function formatTime(value) {
     if (!value) return "—";
-    return new Date(value).toLocaleString([], {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString([], {
       month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit"
     });
   }
 
-  function getStatus(type, value) {
-    if (type === "temperature") return value > 32 ? "Check" : "Normal";
-    if (type === "humidity") return value > 75 || value < 35 ? "Check" : "Normal";
-    if (type === "light") return value < 180 ? "Low" : "Normal";
-    if (type === "distance") return value < 12 ? "Near" : "Normal";
+  function statusFor(type, value) {
+    if (!Number.isFinite(value)) return "Invalid";
+    if (type === "temperature") return value < 0 || value > 40 ? "Check" : "Normal";
+    if (type === "humidity") return value < 20 || value > 90 ? "Check" : "Normal";
     return "Recorded";
   }
 
-  function updateMetric(type, row) {
-    const meta = SENSOR_META[type];
-    if (!meta) return;
+  function latestByType() {
+    const latest = {};
+    for (const row of rows) if (!latest[row.sensor_type]) latest[row.sensor_type] = row;
+    return latest;
+  }
 
+  function renderMetric(type, row) {
+    const meta = SENSOR_META[type];
     const valueNode = $(meta.metric);
     const statusNode = $(meta.status);
-
     if (!row) {
       valueNode.textContent = "—";
       statusNode.textContent = "No data";
       statusNode.className = "status";
       return;
     }
-
     const value = Number(row.sensor_value);
-    valueNode.textContent = Number.isFinite(value) ? String(value) : "—";
-    const status = getStatus(type, value);
+    valueNode.textContent = Number.isFinite(value) ? value.toFixed(1).replace(/\.0$/, "") : "—";
+    const status = statusFor(type, value);
     statusNode.textContent = status;
     statusNode.className = "status " + (status === "Normal" ? "normal" : "warning");
   }
 
-  function latestByType() {
-    const latest = {};
-    for (const row of rows) {
-      if (!latest[row.sensor_type]) latest[row.sensor_type] = row;
-    }
-    return latest;
+  function renderDevice(latest) {
+    const newest = rows[0];
+    const stamp = newest ? new Date(newest.created_at).getTime() : 0;
+    const online = stamp > 0 && Date.now() - stamp <= ONLINE_WINDOW_MS;
+    $("deviceLastSeen").textContent = newest ? "Last data: " + formatTime(newest.created_at) : "Waiting for first sensor upload";
+    $("deviceConnection").innerHTML = online ? "<i></i> Online" : "<i></i> Offline / stale";
+    $("deviceConnection").style.color = online ? "#8ce1c8" : "#ffd28d";
+    $("lastUpdated").textContent = newest ? formatTime(newest.created_at) : "No readings received";
   }
 
   function renderMetrics() {
     const latest = latestByType();
-    Object.keys(SENSOR_META).forEach((type) => updateMetric(type, latest[type]));
-    const newest = rows[0];
-    $("lastUpdated").textContent = newest ? formatTime(newest.created_at) : "No readings yet";
+    Object.keys(SENSOR_META).forEach((type) => renderMetric(type, latest[type]));
+    renderDevice(latest);
   }
 
   function renderTable() {
     const body = $("readingsTable");
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="5" class="empty-state">No sensor readings found in Supabase yet.</td></tr>';
+      body.innerHTML = '<tr><td colspan="5" class="empty-state">Waiting for real ESP32 DHT11 readings. Check Wi-Fi, wiring and firmware.</td></tr>';
       return;
     }
-
-    body.innerHTML = rows.slice(0, 20).map((row) => {
+    body.innerHTML = rows.slice(0, 25).map((row) => {
       const meta = SENSOR_META[row.sensor_type] || { label: row.sensor_type || "Unknown" };
       const value = Number(row.sensor_value);
-      const status = getStatus(row.sensor_type, value);
-      const statusClass = status === "Normal" ? "normal" : "warning";
-      return '<tr>' +
-        '<td><span class="sensor-dot"></span>' + meta.label + '</td>' +
-        '<td>' + (row.sensor_name || "—") + '</td>' +
-        '<td><strong>' + (Number.isFinite(value) ? value : "—") + ' ' + (row.unit || "") + '</strong></td>' +
-        '<td>' + formatTime(row.created_at) + '</td>' +
-        '<td><span class="status ' + statusClass + '">' + status + '</span></td>' +
-      '</tr>';
+      const status = statusFor(row.sensor_type, value);
+      const cls = status === "Normal" ? "normal" : "warning";
+      return '<tr><td><span class="sensor-dot"></span>' + safeText(meta.label) + '</td>' +
+        '<td>' + safeText(row.sensor_name) + '</td>' +
+        '<td><strong>' + (Number.isFinite(value) ? value : "—") + ' ' + safeText(row.unit) + '</strong></td>' +
+        '<td>' + safeText(formatTime(row.created_at)) + '</td>' +
+        '<td><span class="status ' + cls + '">' + safeText(status) + '</span></td></tr>';
     }).join("");
   }
 
   function rowsInRange() {
-    const now = Date.now();
-    const rangeMs = currentRange === "1H" ? 60 * 60 * 1000 :
-      currentRange === "24H" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-
-    return rows
-      .filter((row) => row.sensor_type === "temperature" && new Date(row.created_at).getTime() >= now - rangeMs)
-      .slice()
-      .reverse();
+    const rangeMs = currentRange === "1H" ? 3600000 :
+      currentRange === "24H" ? 86400000 : 604800000;
+    return rows.filter((row) => row.sensor_type === "temperature" &&
+      new Date(row.created_at).getTime() >= Date.now() - rangeMs).slice().reverse();
   }
 
   function drawChart() {
-    const pointsData = rowsInRange();
-    const width = 760;
-    const height = 202;
-
-    if (!pointsData.length) {
+    const points = rowsInRange();
+    const width = 760, height = 202;
+    if (!points.length) {
       $("chartLine").setAttribute("d", "");
       $("chartArea").setAttribute("d", "");
-      $("chartLabels").innerHTML = "<span>No temperature history in this range</span>";
+      $("chartPoint").setAttribute("r", "0");
+      $("chartLabels").innerHTML = "<span>No temperature readings in this time range</span>";
       $("chartCurrent").textContent = "—";
       return;
     }
-
-    const values = pointsData.map((row) => Number(row.sensor_value));
-    const low = Math.min(20, ...values) - 1;
-    const high = Math.max(40, ...values) + 1;
-    const xFor = (index) => pointsData.length === 1 ? width / 2 : index * width / (pointsData.length - 1);
-    const yFor = (value) => height - ((value - low) / (high - low)) * height;
-    const coords = values.map((value, index) => [xFor(index), yFor(value)]);
-    const line = coords.map((point, index) =>
-      (index ? "L" : "M") + point[0].toFixed(1) + " " + point[1].toFixed(1)
-    ).join(" ");
-
+    const values = points.map((r) => Number(r.sensor_value)).filter(Number.isFinite);
+    if (!values.length) return;
+    const min = Math.min(...values) - 1, max = Math.max(...values) + 1;
+    const span = Math.max(max - min, 2);
+    const coords = values.map((v, i) => [
+      points.length === 1 ? width / 2 : i * width / (points.length - 1),
+      height - ((v - min) / span) * height
+    ]);
+    const line = coords.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
     $("chartLine").setAttribute("d", line);
     $("chartArea").setAttribute("d", line + " L " + width + " " + height + " L 0 " + height + " Z");
-
     const last = coords[coords.length - 1];
+    $("chartPoint").setAttribute("r", "5");
     $("chartPoint").setAttribute("cx", last[0]);
     $("chartPoint").setAttribute("cy", last[1]);
     $("chartCurrent").textContent = values[values.length - 1] + "°C";
-
-    const firstTime = pointsData[0].created_at;
-    const lastTime = pointsData[pointsData.length - 1].created_at;
-    $("chartLabels").innerHTML =
-      "<span>" + new Date(firstTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + "</span>" +
-      "<span>" + new Date(lastTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + "</span>";
+    $("chartLabels").innerHTML = "<span>" +
+      safeText(new Date(points[0].created_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})) +
+      "</span><span>" +
+      safeText(new Date(points[points.length - 1].created_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})) +
+      "</span>";
   }
 
-  async function loadReadings() {
-    if (!supabaseClient) return;
-
-    setCloudStatus("Refreshing database…", "pending");
-
-    const { data, error } = await supabaseClient
-      .from("sensor_readings")
-      .select("id,created_at,sensor_name,sensor_type,sensor_value,unit")
-      .order("created_at", { ascending: false })
-      .limit(500);
-
-    if (error) {
-      console.error("Supabase read failed:", error);
-      setCloudStatus("Database read failed", "error");
-      $("readingsTable").innerHTML =
-        '<tr><td colspan="5" class="empty-state">Could not read sensor_readings. Check the Supabase Data API grants and SELECT policy.</td></tr>';
-      return;
-    }
-
-    rows = data || [];
-    lastFetchAt = new Date();
-    setCloudStatus("Connected · " + rows.length + " database readings", "online");
+  function render() {
     renderMetrics();
     renderTable();
     drawChart();
+  }
+
+  async function loadReadings(showStatus = true) {
+    if (!client) return;
+    if (showStatus) setCloudStatus("Syncing live sensor data…", "pending");
+    const { data, error } = await client.from("sensor_readings")
+      .select("id,created_at,sensor_name,sensor_type,sensor_value,unit")
+      .eq("sensor_name", DEVICE_NAME)
+      .in("sensor_type", ["temperature", "humidity"])
+      .order("created_at", { ascending: false })
+      .limit(500);
+    if (error) {
+      console.error("Supabase read failed:", error);
+      setCloudStatus("Database read failed", "error");
+      return;
+    }
+    rows = data || [];
+    setCloudStatus("Supabase connected · " + rows.length + " readings", "online");
+    render();
+  }
+
+  function startRealtime() {
+    channel = client.channel("studentiot-dht11-live")
+      .on("postgres_changes", {
+        event: "INSERT", schema: "public", table: "sensor_readings"
+      }, (payload) => {
+        const row = payload.new;
+        if (row && row.sensor_name === DEVICE_NAME &&
+            (row.sensor_type === "temperature" || row.sensor_type === "humidity")) {
+          rows = [row, ...rows.filter((r) => r.id !== row.id)].slice(0, 500);
+          setCloudStatus("Live · new ESP32 reading received", "online");
+          render();
+        }
+      })
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          setCloudStatus("Realtime connected · ESP32-01", "online");
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          setCloudStatus("Realtime reconnecting · polling fallback", "pending");
+        }
+      });
   }
 
   function init() {
@@ -177,12 +195,12 @@
       setCloudStatus("Supabase library unavailable", "error");
       return;
     }
-
-    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
-
-    // Display only rows that already exist in Supabase. This page does not invent or insert readings.
+    client = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
     loadReadings();
-    window.setInterval(loadReadings, 10000);
+    startRealtime();
+    // Fallback keeps the interface fresh if a browser/network temporarily drops Realtime.
+    refreshTimer = window.setInterval(() => loadReadings(false), 15000);
+    window.setInterval(() => renderDevice(latestByType()), 5000);
 
     document.querySelectorAll(".range-tab").forEach((button) => {
       button.addEventListener("click", () => {
@@ -192,10 +210,11 @@
         drawChart();
       });
     });
-
-    const refreshButton = $("refreshButton");
-    refreshButton.innerHTML = "↻ <span>Refresh database</span>";
-    refreshButton.addEventListener("click", loadReadings);
+    $("refreshButton").addEventListener("click", () => loadReadings());
+    window.addEventListener("beforeunload", () => {
+      if (refreshTimer) window.clearInterval(refreshTimer);
+      if (channel) client.removeChannel(channel);
+    });
   }
 
   init();
