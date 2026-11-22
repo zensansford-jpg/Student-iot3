@@ -24,7 +24,7 @@
 const char* WIFI_SSID = "YOUR_WIFI_NAME";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 const char* SUPABASE_URL = "https://bbnvfbjkzjexcfyprkbl.supabase.co";
-const char* SUPABASE_ANON_KEY = "YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY";
+const char* SUPABASE_ANON_KEY = "sb_publishable_LVBYcxg9tXCvag0DVPjumQ_uBoGI451";
 const char* DEVICE_NAME = "ESP32-01";
 
 const unsigned long SEND_INTERVAL_MS = 10000;
